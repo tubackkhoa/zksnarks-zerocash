@@ -1,10 +1,6 @@
-use ff::{BitIterator, PrimeField, Field};
-use pairing::{bn256::{Bn256, Fr}};
-use sapling_crypto::{
-    babyjubjub::{
-        JubjubBn256,
-    },
-};
+use ff::{BitIterator, Field, PrimeField};
+use pairing::bn256::{Bn256, Fr};
+use sapling_crypto::babyjubjub::JubjubBn256;
 
 /// Binary Tree where leaves hold a stand-alone value.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -36,7 +32,10 @@ pub struct MerkleTree {
     pub root: Tree,
 }
 
-pub fn create_leaf_from_preimage(nullifier: pairing::bn256::Fr, secret: pairing::bn256::Fr) -> Tree {
+pub fn create_leaf_from_preimage(
+    nullifier: pairing::bn256::Fr,
+    secret: pairing::bn256::Fr,
+) -> Tree {
     let params = &JubjubBn256::new();
     let mut lhs: Vec<bool> = BitIterator::new(nullifier.into_repr()).collect();
     let mut rhs: Vec<bool> = BitIterator::new(secret.into_repr()).collect();
@@ -45,14 +44,13 @@ pub fn create_leaf_from_preimage(nullifier: pairing::bn256::Fr, secret: pairing:
     let hash = sapling_crypto::baby_pedersen_hash::pedersen_hash::<Bn256, _>(
         sapling_crypto::baby_pedersen_hash::Personalization::NoteCommitment,
         lhs.into_iter()
-           .take(Fr::NUM_BITS as usize)
-           .chain(rhs.into_iter().take(Fr::NUM_BITS as usize)),
-        params
-    ).into_xy().0;
-    return Tree::Empty {
-        hash: hash,
-        parent: None,
-    };
+            .take(Fr::NUM_BITS as usize)
+            .chain(rhs.into_iter().take(Fr::NUM_BITS as usize)),
+        params,
+    )
+    .into_xy()
+    .0;
+    return Tree::Empty { hash, parent: None };
 }
 
 pub fn create_leaf_list(mut nodes: Vec<pairing::bn256::Fr>, depth: usize) -> Vec<Box<Tree>> {
@@ -79,13 +77,11 @@ pub fn build_merkle_tree_with_proof(
     target_node: pairing::bn256::Fr,
     curr_list: Vec<Option<(bool, pairing::bn256::Fr)>>,
 ) -> (MerkleTree, Vec<Option<(bool, pairing::bn256::Fr)>>) {
-    let ( mut new_nodes, target_node, new_curr_list ) = hash_nodes_rec(nodes, depth, top_depth, target_node, curr_list);
+    let (mut new_nodes, target_node, new_curr_list) =
+        hash_nodes_rec(nodes, depth, top_depth, target_node, curr_list);
     if new_nodes.len() == 1 {
         let root = new_nodes.remove(0);
-        return (
-            MerkleTree { root: *root },
-            new_curr_list,
-        );
+        return (MerkleTree { root: *root }, new_curr_list);
     } else {
         return build_merkle_tree_with_proof(
             new_nodes,
@@ -103,8 +99,12 @@ pub fn hash_nodes_rec(
     depth: usize,
     top_depth: usize,
     mut target_node: pairing::bn256::Fr,
-    mut curr_list: Vec<Option<(bool, pairing::bn256::Fr)>>
-) -> (Vec<Box<Tree>>, pairing::bn256::Fr, Vec<Option<(bool, pairing::bn256::Fr)>>) {
+    mut curr_list: Vec<Option<(bool, pairing::bn256::Fr)>>,
+) -> (
+    Vec<Box<Tree>>,
+    pairing::bn256::Fr,
+    Vec<Option<(bool, pairing::bn256::Fr)>>,
+) {
     if nodes.len() == 2 {
         let left = nodes.remove(0);
         let right = nodes.remove(0);
@@ -124,27 +124,19 @@ pub fn hash_nodes_rec(
         }
         if depth == 1 {
             curr_list.append(&mut val);
-            return (
-                vec![cur],
-                target_node,
-                curr_list,
-            );
+            return (vec![cur], target_node, curr_list);
         } else {
-            return (
-                vec![cur],
-                target_node,
-                val,
-            );
+            return (vec![cur], target_node, val);
         }
     } else {
-        let ( mut left_new_nodes, left_target_node, mut left_new_curr_list ) = hash_nodes_rec(
+        let (mut left_new_nodes, left_target_node, mut left_new_curr_list) = hash_nodes_rec(
             nodes[..(nodes.len() / 2)].to_vec(),
             depth,
             top_depth,
             target_node,
             curr_list.clone(),
         );
-        let ( mut right_new_nodes, right_target_node, mut right_new_curr_list ) = hash_nodes_rec(
+        let (mut right_new_nodes, right_target_node, mut right_new_curr_list) = hash_nodes_rec(
             nodes[(nodes.len() / 2)..].to_vec(),
             depth,
             top_depth,
@@ -161,12 +153,8 @@ pub fn hash_nodes_rec(
         left_new_nodes.append(&mut right_new_nodes);
         curr_list.append(&mut left_new_curr_list);
         curr_list.append(&mut right_new_curr_list);
-        
-        return (
-            left_new_nodes,
-            target_node,
-            curr_list,
-        );
+
+        return (left_new_nodes, target_node, curr_list);
     }
 }
 
@@ -176,23 +164,31 @@ pub fn hash_leaf_pair(index: usize, lhs: Tree, rhs: Tree) -> Box<Tree> {
     let mut rhs_bool: Vec<bool> = BitIterator::new((rhs).hash().into_repr()).collect();
     lhs_bool.reverse();
     rhs_bool.reverse();
-    let personalization = sapling_crypto::baby_pedersen_hash::Personalization::MerkleTree(index as usize);
+    let personalization =
+        sapling_crypto::baby_pedersen_hash::Personalization::MerkleTree(index as usize);
     let hash = sapling_crypto::baby_pedersen_hash::pedersen_hash::<Bn256, _>(
         personalization,
-        lhs_bool.clone().into_iter()
-           .take(Fr::NUM_BITS as usize)
-           .chain(rhs_bool.clone().into_iter().take(Fr::NUM_BITS as usize)),
-        params
-    ).into_xy().0;
+        lhs_bool
+            .clone()
+            .into_iter()
+            .take(Fr::NUM_BITS as usize)
+            .chain(rhs_bool.clone().into_iter().take(Fr::NUM_BITS as usize)),
+        params,
+    )
+    .into_xy()
+    .0;
     return Box::new(Tree::Node {
-        hash: hash,
+        hash,
         left: Box::new(lhs),
         right: Box::new(rhs),
         parent: None,
     });
 }
 
-pub fn compute_root_from_proof(leaf: pairing::bn256::Fr, path: Vec<Option<(bool, pairing::bn256::Fr)>>) -> pairing::bn256::Fr {
+pub fn compute_root_from_proof(
+    leaf: pairing::bn256::Fr,
+    path: Vec<Option<(bool, pairing::bn256::Fr)>>,
+) -> pairing::bn256::Fr {
     let mut hash = leaf;
     for i in 0..path.len() {
         match path[i] {
@@ -200,18 +196,32 @@ pub fn compute_root_from_proof(leaf: pairing::bn256::Fr, path: Vec<Option<(bool,
                 if right_side {
                     hash = *hash_leaf_pair(
                         i,
-                        Tree::Empty { hash: hash, parent: None },
-                        Tree::Empty { hash: pt, parent: None })
+                        Tree::Empty {
+                            hash: hash,
+                            parent: None,
+                        },
+                        Tree::Empty {
+                            hash: pt,
+                            parent: None,
+                        },
+                    )
                     .hash();
                 } else {
                     hash = *hash_leaf_pair(
                         i,
-                        Tree::Empty { hash: pt, parent: None },
-                        Tree::Empty { hash: hash, parent: None })
+                        Tree::Empty {
+                            hash: pt,
+                            parent: None,
+                        },
+                        Tree::Empty {
+                            hash: hash,
+                            parent: None,
+                        },
+                    )
                     .hash();
                 }
-            },
-            None => {},
+            }
+            None => {}
         }
     }
 

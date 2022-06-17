@@ -1,35 +1,29 @@
-use sapling_crypto::circuit::blake2s::blake2s;
-use rand::{ChaChaRng, SeedableRng, Rng};
-use bellman::groth16::{Proof, Parameters, verify_proof, create_random_proof, prepare_verifying_key, generate_random_parameters};
+use bellman::groth16::{
+    create_random_proof, generate_random_parameters, prepare_verifying_key, verify_proof,
+    Parameters, Proof,
+};
 use num_bigint::BigInt;
 use num_traits::Num;
+use rand::{ChaChaRng, Rng, SeedableRng};
+use sapling_crypto::circuit::blake2s::blake2s;
 use std::error::Error;
 
-use pairing::{bn256::{Fr, Bn256}};
+use pairing::bn256::{Bn256, Fr};
 
 use wasm_bindgen::prelude::*;
 
-use pairing::{
-    Engine,
+use pairing::Engine;
+
+use bellman::{Circuit, ConstraintSystem, SynthesisError};
+
+use ff::PrimeField;
+use sapling_crypto::circuit::{
+    boolean::{AllocatedBit, Boolean},
+    multipack,
+    num::AllocatedNum,
 };
 
-use bellman::{
-    Circuit,
-    SynthesisError,
-    ConstraintSystem,
-};
-
-use ff::{PrimeField};
-use sapling_crypto::{
-    circuit::{
-        multipack,
-        num::{AllocatedNum},
-        boolean::{Boolean, AllocatedBit},
-    }
-};
-
-pub const SUBSTRATE_BLAKE2_PERSONALIZATION: &'static [u8; 8]
-          = b"12345678";
+pub const SUBSTRATE_BLAKE2_PERSONALIZATION: &'static [u8; 8] = b"12345678";
 
 /// Circuit for proving knowledge of preimage of leaf in merkle tree
 pub struct BlakeTreeCircuit {
@@ -49,19 +43,23 @@ impl<E: Engine> Circuit<E> for BlakeTreeCircuit {
         // nullifier is the left side of the preimage
         let nullifier: Vec<Boolean> = witness_u256(
             cs.namespace(|| "nullifier as Vec<Boolean>"),
-            self.nullifier.as_ref().map(|v| &v[..])
-        ).unwrap();
+            self.nullifier.as_ref().map(|v| &v[..]),
+        )
+        .unwrap();
         multipack::pack_into_inputs(cs.namespace(|| "nullifier pack"), &nullifier)?;
 
-        let nullifier_field_pt: E::Fr = multipack::compute_multipacking::<E>(&booleans_to_bools(nullifier.clone()))[0];
-        let nullifier_alloc: AllocatedNum<E> = AllocatedNum::alloc(cs.namespace(|| "nullifier"), || Ok(nullifier_field_pt))?;
+        let nullifier_field_pt: E::Fr =
+            multipack::compute_multipacking::<E>(&booleans_to_bools(nullifier.clone()))[0];
+        let nullifier_alloc: AllocatedNum<E> =
+            AllocatedNum::alloc(cs.namespace(|| "nullifier"), || Ok(nullifier_field_pt))?;
         nullifier_alloc.inputize(cs.namespace(|| "public input nullifier"))?;
 
         // secret is the right side of the preimage
         let secret: Vec<Boolean> = witness_u256(
             cs.namespace(|| "secret"),
-            self.secret.as_ref().map(|v| &v[..])
-        ).unwrap();
+            self.secret.as_ref().map(|v| &v[..]),
+        )
+        .unwrap();
         multipack::pack_into_inputs(cs.namespace(|| "secret pack"), &secret)?;
 
         // construct preimage using [nullifier_bits|secret_bits] concatenation
@@ -74,18 +72,23 @@ impl<E: Engine> Circuit<E> for BlakeTreeCircuit {
         preimage.resize(512, Boolean::Constant(false));
 
         // compute leaf hash using pedersen hash of preimage
-        let mut hash = match blake2s(cs.namespace(|| "preimage hash"), &preimage, SUBSTRATE_BLAKE2_PERSONALIZATION) {
+        let mut hash = match blake2s(
+            cs.namespace(|| "preimage hash"),
+            &preimage,
+            SUBSTRATE_BLAKE2_PERSONALIZATION,
+        ) {
             Ok(value) => value,
             Err(e) => panic!("{:?}", e),
         };
 
         // reconstruct merkle root hash using the private merkle path
         for i in 0..self.proof.len() {
-			if let Some((ref side, ref element)) = self.proof[i] {
+            if let Some((ref side, ref element)) = self.proof[i] {
                 let elt = witness_u256(
                     cs.namespace(|| format!("elt {}", i)),
-                    Some(element.as_ref())
-                ).unwrap();
+                    Some(element.as_ref()),
+                )
+                .unwrap();
 
                 // Swap the two if the current subtree is on the right
                 let (xl, xr): (Vec<Boolean>, Vec<Boolean>);
@@ -105,23 +108,30 @@ impl<E: Engine> Circuit<E> for BlakeTreeCircuit {
                 preimage.extend(xr.iter().cloned());
                 preimage.resize(512, Boolean::Constant(false));
 
-
-                hash = blake2s(cs.namespace(|| format!("black hash depth: {}", i)), &preimage, SUBSTRATE_BLAKE2_PERSONALIZATION).unwrap();
+                hash = blake2s(
+                    cs.namespace(|| format!("black hash depth: {}", i)),
+                    &preimage,
+                    SUBSTRATE_BLAKE2_PERSONALIZATION,
+                )
+                .unwrap();
             }
         }
 
         assert_eq!(hash.len(), 256);
         let hash_pt = multipack::compute_multipacking::<E>(&booleans_to_bools(hash))[0];
-        let hash_alloc: AllocatedNum<E> = AllocatedNum::alloc(cs.namespace(|| "hash alloc"), || Ok(hash_pt))?;
+        let hash_alloc: AllocatedNum<E> =
+            AllocatedNum::alloc(cs.namespace(|| "hash alloc"), || Ok(hash_pt))?;
         hash_alloc.inputize(cs.namespace(|| "calculated root hash"))?;
         Ok(())
     }
 }
 
 fn booleans_to_bools(booleans: Vec<Boolean>) -> Vec<bool> {
-    return booleans.clone().iter_mut().map(|b| {
-        b.get_value().unwrap()
-    }).collect();
+    return booleans
+        .clone()
+        .iter_mut()
+        .map(|b| b.get_value().unwrap_or_default())
+        .collect();
 }
 
 fn print_booleans(booleans: Vec<Boolean>) {
@@ -136,15 +146,18 @@ fn witness_bits<E, CS>(
     mut cs: CS,
     value: Option<&[u8]>,
     num_bits: usize,
-    skip_bits: usize
+    skip_bits: usize,
 ) -> Result<Vec<Boolean>, SynthesisError>
-    where E: Engine, CS: ConstraintSystem<E>,
+where
+    E: Engine,
+    CS: ConstraintSystem<E>,
 {
     let bit_values = if let Some(value) = value {
         let mut tmp = vec![];
-        for b in value.iter()
-                      .flat_map(|&m| (0..8).rev().map(move |i| m >> i & 1 == 1))
-                      .skip(skip_bits)
+        for b in value
+            .iter()
+            .flat_map(|&m| (0..8).rev().map(move |i| m >> i & 1 == 1))
+            .skip(skip_bits)
         {
             tmp.push(Some(b));
         }
@@ -159,25 +172,24 @@ fn witness_bits<E, CS>(
     for (i, value) in bit_values.into_iter().enumerate() {
         bits.push(Boolean::from(AllocatedBit::alloc(
             cs.namespace(|| format!("bit {}", i)),
-            value
+            value,
         )?));
     }
 
     Ok(bits)
 }
 
-fn witness_u256<E, CS>(
-    cs: CS,
-    value: Option<&[u8]>,
-) -> Result<Vec<Boolean>, SynthesisError>
-    where E: Engine, CS: ConstraintSystem<E>,
+fn witness_u256<E, CS>(cs: CS, value: Option<&[u8]>) -> Result<Vec<Boolean>, SynthesisError>
+where
+    E: Engine,
+    CS: ConstraintSystem<E>,
 {
     witness_bits(cs, value, 256, 0)
 }
 
 #[derive(Serialize)]
 pub struct KGGenerate {
-    pub params: String
+    pub params: String,
 }
 
 #[derive(Serialize)]
@@ -187,7 +199,7 @@ pub struct KGProof {
 
 #[derive(Serialize)]
 pub struct KGVerify {
-    pub result: bool
+    pub result: bool,
 }
 
 pub fn generate(seed_slice: &[u32], depth: u32) -> Result<KGGenerate, Box<Error>> {
@@ -195,10 +207,7 @@ pub fn generate(seed_slice: &[u32], depth: u32) -> Result<KGGenerate, Box<Error>
     let mut proof_elts = vec![];
 
     for _ in 0..depth {
-        proof_elts.push(Some((
-            true,
-            rng.gen::<[u8; 32]>(),
-        )));
+        proof_elts.push(Some((true, rng.gen::<[u8; 32]>())));
     }
 
     let result = generate_random_parameters::<Bn256, _, _>(
@@ -220,7 +229,7 @@ pub fn generate(seed_slice: &[u32], depth: u32) -> Result<KGGenerate, Box<Error>
     params.write(&mut v)?;
 
     Ok(KGGenerate {
-        params: hex::encode(&v[..])
+        params: hex::encode(&v[..]),
     })
 }
 
@@ -229,7 +238,7 @@ pub fn prove(
     params: &str,
     nullifier: &[u8; 32],
     secret: &[u8; 32],
-    proof_path: Vec<Option<(bool,[u8; 32])>>,
+    proof_path: Vec<Option<(bool, [u8; 32])>>,
 ) -> Result<KGProof, Box<Error>> {
     let rng = &mut ChaChaRng::from_seed(seed_slice);
     // construct proof path structure
@@ -242,8 +251,9 @@ pub fn prove(
             proof: proof_path,
         },
         &de_params,
-        rng
-    ).unwrap();
+        rng,
+    )
+    .unwrap();
 
     let mut v = vec![];
     proof.write(&mut v)?;
@@ -256,7 +266,7 @@ pub fn verify(
     params: &str,
     proof: &str,
     nullifier_hex: &str,
-    root_hex: &str
+    root_hex: &str,
 ) -> Result<KGVerify, Box<Error>> {
     let de_params = Parameters::read(&hex::decode(params)?[..], true)?;
     let pvk = prepare_verifying_key::<Bn256>(&de_params.vk);
@@ -271,14 +281,10 @@ pub fn verify(
     let result = verify_proof(
         &pvk,
         &Proof::read(&hex::decode(proof)?[..])?,
-        &[
-            nullifier,
-            root
-        ])?;
+        &[nullifier, root],
+    )?;
 
-    Ok(KGVerify{
-        result: result
-    })
+    Ok(KGVerify { result: result })
 }
 
 #[wasm_bindgen]
@@ -302,7 +308,7 @@ pub fn prove_tree(
     params: &str,
     nullifier: &[u8; 32],
     secret: &[u8; 32],
-    proof_path: Vec<Option<(bool,[u8; 32])>>,
+    proof_path: Vec<Option<(bool, [u8; 32])>>,
 ) -> Result<JsValue, JsValue> {
     let res = prove(seed_slice, params, nullifier, secret, proof_path);
     if res.is_ok() {
